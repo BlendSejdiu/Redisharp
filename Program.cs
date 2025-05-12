@@ -32,7 +32,14 @@ class Program
                     "EXISTS" => HandleExists(redis, parts),
                     "TTL" => HandleTtl(redis, parts),
                     "INCR" => HandleIncr(redis, parts),
-                    "HELP" => "Available commands: SET, GET, DEL, EXISTS, TTL, INCR, HELP, EXIT", 
+                    "LPUSH" => HandleLPush(redis, parts),
+                    "RPUSH" => HandleRPush(redis, parts),
+                    "LPOP" => HandleLPop(redis, parts),
+                    "RPOP" => HandleRPop(redis, parts),
+                    "LLEN" => HandleLLen(redis, parts),
+                    "LRANGE" => HandleLRange(redis, parts),
+                    "HELP" => "Available commands: SET, GET, DEL, EXISTS, TTL, INCR"
+                    + "LPUSH, RPUSH, LPOP, RPOP, LLEN, LRANGE, HELP, EXIT",
                     _ => $"Unknown command: {command}"
                 };
 
@@ -45,6 +52,7 @@ class Program
         }
     }
 
+    #region String Handlers
     static string HandleSet(MiniRedis redis, string[] parts)
     {
         if (parts.Length < 3)
@@ -76,17 +84,17 @@ class Program
 
     static string HandleDel(MiniRedis redis, string[] parts)
     {
-        if (parts.Length < 2) 
+        if (parts.Length < 2)
             return "Syntax: DEL key [key ...]";
 
-        var keys = parts[1..]; 
+        var keys = parts[1..];
         var deleted = redis.Delete(keys);
         return "Delete Success.";
     }
 
     static string HandleExists(MiniRedis redis, string[] parts)
     {
-        if (parts.Length != 2) 
+        if (parts.Length != 2)
             return "Syntax: EXISTS key";
 
         return redis.Exists(parts[1]) ? "True" : "False";
@@ -94,7 +102,7 @@ class Program
 
     static string HandleTtl(MiniRedis redis, string[] parts)
     {
-        if (parts.Length != 2) 
+        if (parts.Length != 2)
             return "Syntax: TTL key";
 
         var ttl = redis.Ttl(parts[1]);
@@ -103,10 +111,118 @@ class Program
 
     static string HandleIncr(MiniRedis redis, string[] parts)
     {
-        if (parts.Length != 2) 
+        if (parts.Length != 2)
             return "Syntax: INCR key";
 
         var newValue = redis.Increment(parts[1]);
         return $"(integer) {newValue}";
     }
+    #endregion
+
+    #region List Handlers
+
+    static string HandleLPush(MiniRedis redis, string[] parts)
+    { 
+        if(parts.Length < 3)
+            return "ERR wrong number of arguments for 'LPUSH' command";
+
+        try
+        {
+            var count = redis.LPush(parts[1], parts[2..]);
+            return $"(integer) {count}";
+        }
+        catch (InvalidOperationException ex)
+        {
+            return $"ERR {ex.Message}";
+        }
+    }
+
+    static string HandleRPush(MiniRedis redis, string[] parts)
+    {
+        if (parts.Length < 3)
+            return "ERR wrong number of arguments for 'RPush' command";
+
+        try
+        {
+            var count = redis.RPush(parts[1], parts[2..]);
+            return $"(integer) {count}";
+        }
+        catch (InvalidOperationException ex)
+        {
+            return $"ERR {ex.Message}";
+        }
+    }
+
+    static string HandleLPop(MiniRedis redis, string[] parts)
+    {
+        if(parts.Length != 2)
+            return "ERR wrong number of arguments for 'LPOP' command";
+
+        try
+        {
+            var value = redis.LPop(parts[1]);
+            return value ?? "null";
+        }
+        catch (InvalidOperationException ex)
+        {
+            return $"ERR {ex.Message}";
+        }
+    }
+
+    static string HandleRPop(MiniRedis redis, string[] parts)
+    {
+        if (parts.Length != 2)
+            return "ERR wrong number of arguments for 'RPOP' command";
+
+        try
+        {
+            var value = redis.RPop(parts[1]);
+            return value ?? "null";
+        }
+        catch (InvalidOperationException ex)
+        {
+            return $"ERR {ex.Message}";
+        }
+    }
+
+    static string HandleLLen(MiniRedis redis, string[] parts)
+    {
+        if (parts.Length != 2)
+            return "ERR wrong number of arguments for 'LLEN' command";
+
+        try
+        {
+            var length = redis.LLen(parts[1]);
+            return $"(integer) {length}";
+        }
+        catch (InvalidOperationException ex)
+        {
+            return $"ERR {ex.Message}";
+        }
+    }
+
+    static string HandleLRange(MiniRedis redis, string[] parts)
+    {
+        if (parts.Length != 4)
+            return "ERR wrong number of arguments for 'LRANGE' command";
+
+        if (!long.TryParse(parts[2], out long start) || !long.TryParse(parts[3], out long stop))
+            return "ERR value is not an integer or out of range";
+
+        try
+        {
+            var range = redis.LRange(parts[1], start, stop);
+
+            if (range == null || range.Count == 0)
+                return "(empty list or set)";
+
+            return string.Join("\n", range.Select((item, index) => $"{index + 1}) {item}"));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return $"ERR {ex.Message}";
+        }
+    }
+
+    #endregion
 }
