@@ -1,5 +1,6 @@
 ﻿
 using RedSharp;
+using System.Collections.Generic;
 
 class Program
 {
@@ -38,8 +39,15 @@ class Program
                     "RPOP" => HandleRPop(redis, parts),
                     "LLEN" => HandleLLen(redis, parts),
                     "LRANGE" => HandleLRange(redis, parts),
-                    "HELP" => "Available commands: SET, GET, DEL, EXISTS, TTL, INCR"
-                    + "LPUSH, RPUSH, LPOP, RPOP, LLEN, LRANGE, HELP, EXIT",
+                    "HSET" => HandleHSet(redis, parts),
+                    "HGET" => HandleHGet(redis, parts),
+                    "HGETALL" => HandleHGetAll(redis, parts),
+                    "HDEL" => HandleHDel(redis, parts),
+                    "HEXISTS" => HandleHExists(redis, parts),
+                    "HLEN" => HandleHLen(redis, parts),
+                    "HELP" => "Available commands: SET, GET, DEL, EXISTS, TTL, INCR, " +
+                              "LPUSH, RPUSH, LPOP, RPOP, LLEN, LRANGE, " +
+                              "HSET, HGET, HGETALL, HDEL, HEXISTS, HLEN, " + "HELP, EXIT",
                     _ => $"Unknown command: {command}"
                 };
 
@@ -120,7 +128,6 @@ class Program
     #endregion
 
     #region List Handlers
-
     static string HandleLPush(MiniRedis redis, string[] parts)
     { 
         if(parts.Length < 3)
@@ -225,4 +232,122 @@ class Program
     }
 
     #endregion
+
+    #region Hash Handlers
+
+    static string HandleHSet(MiniRedis redis, string[] parts)
+    {
+        if (parts.Length < 3)
+            return "ERR wrong number of arguments for 'HSET' command";
+
+        if ((parts.Length - 2) % 2 != 0)
+            return "ERR wrong number of arguments for 'HSET' command";
+
+        try
+        {
+            var key = parts[1];
+
+            if (parts.Length == 3)
+            {
+                var result = redis.HSet(key, parts[1], parts[2]);
+                return $"(integer) {result}";
+            }
+
+            var fields = new Dictionary<string, string>();
+            for (int i = 2; i < parts.Length; i += 2)
+            {
+                fields[parts[i]] = parts[i + 1];
+            }
+            var count = redis.HSet(key, fields);
+            return $"(integer) {count}";
+        }
+        catch (InvalidOperationException ex)
+        {
+            return $"ERR {ex.Message}";
+        }
+    }
+    static string HandleHGet(MiniRedis redis, string[] parts)
+    {
+        if (parts.Length != 3)
+            return "ERR wrong number of arguments for 'HGET' command";
+
+        try
+        {
+            var value = redis.HGet(parts[1], parts[2]);
+            return value ?? "(nil)";
+        }
+        catch (InvalidOperationException ex)
+        {
+            return $"ERR {ex.Message}";
+        }
+    }
+
+    static string HandleHGetAll(MiniRedis redis, string[] parts)
+    {
+        if (parts.Length != 2)
+            return "ERR wrong number of arguments for 'HGETALL' command";
+
+        try
+        {
+            var hash = redis.HGetAll(parts[1]);
+            if (hash == null || hash.Count == 0)
+                return "(empty hash)";
+
+            return string.Join("\n", hash.Select(kvp => $"{kvp.Key}: {kvp.Value}"));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return $"ERR {ex.Message}";
+        }
+    }
+
+    static string HandleHDel(MiniRedis redis, string[] parts)
+    {
+        if (parts.Length < 3)
+            return "ERR wrong number of arguments for 'HDEL' command";
+
+        try
+        {
+            var deleted = redis.HDel(parts[1], parts[2..]);
+            return $"(integer) {deleted}";
+        }
+        catch (InvalidOperationException ex)
+        {
+            return $"ERR {ex.Message}";
+        }
+    }
+
+    static string HandleHExists(MiniRedis redis, string[] parts)
+    {
+        if (parts.Length != 3)
+            return "ERR wrong number of arguments for 'HEXISTS' command";
+
+        try
+        {
+            var exists = redis.HExists(parts[1], parts[2]);
+            return $"(integer) {(exists ? 1 : 0)}";
+        }
+        catch (InvalidOperationException ex)
+        {
+            return $"ERR {ex.Message}";
+        }
+    }
+
+    static string HandleHLen(MiniRedis redis, string[] parts)
+    {
+        if (parts.Length != 2)
+            return "ERR wrong number of arguments for 'HLEN' command";
+
+        try
+        {
+            var length = redis.HLen(parts[1]);
+            return $"(integer) {length}";
+        }
+        catch (InvalidOperationException ex)
+        {
+            return $"ERR {ex.Message}";
+        }
+    }
+    #endregion
+
 }

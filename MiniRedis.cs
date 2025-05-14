@@ -184,5 +184,124 @@ namespace RedSharp
         }
 
         #endregion
+
+        #region Hash Operations 
+
+        #region Helper Methods
+        private Dictionary<string, string> GetOrCreateHash(string key)
+        {
+            if (store.TryGetValue(key, out var item))
+                return item.GetHash();
+
+            var newHash = new Dictionary<string, string>();
+            store[key] = new CacheItem(newHash, DataType.Hash);
+            return newHash;
+        }
+        #endregion
+
+        public long HSet(string key, string field, string value)
+        {
+            var hash = GetOrCreateHash(key);
+            var newField = !hash.ContainsKey(field);
+            hash[field] = value;
+            return newField ? 1 : 0;
+        }
+
+        public long HSet(string key, Dictionary<string, string> fields)
+        {
+            var hash = GetOrCreateHash(key);
+            var count = 0L;
+            foreach (var kvp in fields)
+            {
+                if (!hash.ContainsKey(key))
+                    count++;
+                hash[kvp.Key] = kvp.Value;
+            }
+            return count;
+        }
+
+        public string? HGet(string key, string field)
+        {
+            if (!store.TryGetValue(key, out var item))
+                return null;
+
+            try
+            {
+                var hash = item.GetHash();
+                return hash.TryGetValue(field, out var value) ? value : null;
+            }
+            catch (InvalidOperationException)
+            {
+                return null;
+            }
+        }
+
+        public Dictionary<string, string>? HGetAll(string key)
+        {
+            if (!store.TryGetValue(key, out var item))
+                return null;
+
+            try
+            {
+                return new Dictionary<string, string>(item.GetHash());
+            }
+            catch (InvalidOperationException)
+            {
+                return null;
+            }
+        }
+
+        public long HDel(string key, params string[] fields)
+        {
+            if (!store.TryGetValue(key, out var item))
+                return 0;
+
+            try
+            {
+                var hash = item.GetHash();
+                var deleted = 0L;
+
+                foreach (var kvp in fields)
+                    if (hash.Remove(kvp))
+                        deleted++;
+
+                return deleted;                 
+            }
+            catch (InvalidOperationException)
+            {
+                return 0;
+            }
+        }
+
+        public bool HExists(string key, string field)
+        {
+            if (!store.TryGetValue(key, out var item))
+                return false;
+
+            try
+            {
+                return item.GetHash().ContainsKey(field);
+            }
+            catch (InvalidOperationException)
+            {
+                return false;
+            }
+        }
+
+        public long HLen(string key)
+        {
+            if (!store.TryGetValue(key, out var item))
+                return 0;
+
+            try
+            {
+                return item.GetHash().Count;
+            }
+            catch (InvalidOperationException)
+            {
+                return 0;
+            }
+        }
+        #endregion
     }
 }
