@@ -303,5 +303,103 @@ namespace RedSharp
             }
         }
         #endregion
+
+        #region Set Operations
+
+        #region Helper Methods
+        private HashSet<string> GetOrCreateSet(string key)
+        {
+            if (store.TryGetValue(key, out var item))
+                return item.GetSet();
+
+            var newHash = new HashSet<string>();
+            store[key] = new CacheItem(newHash, DataType.Set);
+            return newHash;
+        }
+
+        private bool TryGetValidSet(string key, out HashSet<string> set)
+        {
+            set = null;
+            if (!store.TryGetValue(key, out var item))
+                return false;
+
+            try
+            {
+                set = item.GetSet();
+                return true;
+            }
+            catch (InvalidOperationException)
+            {
+                return false;
+            }
+        }
+        #endregion
+
+        public long SAdd(string key, params string[] members)
+        { 
+            var set = GetOrCreateSet(key);
+            var added = 0L;
+            foreach (var member in members)
+                if(set.Add(member))
+                    added++;
+            return added;
+        }
+
+        public bool SIsMember(string key, string member)
+        {
+            if (!TryGetValidSet(key, out var set))
+                return false;
+
+            return set.Contains(member);
+        }
+
+        public HashSet<string>? SMembers(string key)
+        {
+            if (!TryGetValidSet(key, out var set))
+                return null;
+
+            return new HashSet<string>(set);
+        }
+
+        public long SCard(string key)
+        {
+            if (!TryGetValidSet(key, out var set))
+                return 0;
+
+            return set.Count;
+        }
+
+        public long SRem(string key, params string[] members)
+        {
+            if (!TryGetValidSet(key, out var set))
+                return 0;
+
+            var removed = 0;
+            foreach (var member in members)
+                if (set.Remove(member))
+                    removed++;
+               
+            return removed;
+        }
+
+        public HashSet<string>? SDiff(params string[] keys)
+        {
+            if (keys.Length == 0)
+                return null;
+
+            HashSet<string>? result = null;
+            foreach (var key in keys)
+            {
+                if (!TryGetValidSet(key, out var set))
+                    continue;
+
+                if (result == null)
+                    result = new HashSet<string>(set);
+                else
+                    result.ExceptWith(set);
+            }
+            return result ?? new HashSet<string>();
+        }
+        #endregion
     }
 }

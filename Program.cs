@@ -45,9 +45,15 @@ class Program
                     "HDEL" => HandleHDel(redis, parts),
                     "HEXISTS" => HandleHExists(redis, parts),
                     "HLEN" => HandleHLen(redis, parts),
+                    "SADD" => HandleSAdd(redis, parts),
+                    "SISMEMBER" => HandleSIsMember(redis, parts),
+                    "SMEMBERS" => HandleSMembers(redis, parts),
+                    "SCARD" => HandleSCard(redis, parts),
+                    "SREM" => HandleSRem(redis, parts),
                     "HELP" => "Available commands: SET, GET, DEL, EXISTS, TTL, INCR, " +
                               "LPUSH, RPUSH, LPOP, RPOP, LLEN, LRANGE, " +
-                              "HSET, HGET, HGETALL, HDEL, HEXISTS, HLEN, " + "HELP, EXIT",
+                              "HSET, HGET, HGETALL, HDEL, HEXISTS, HLEN, " +
+                              "SADD, SREM, SMEMBERS, SISMEMBER, SCARD, " + 0"HELP, EXIT",
                     _ => $"Unknown command: {command}"
                 };
 
@@ -342,6 +348,91 @@ class Program
         {
             var length = redis.HLen(parts[1]);
             return $"(integer) {length}";
+        }
+        catch (InvalidOperationException ex)
+        {
+            return $"ERR {ex.Message}";
+        }
+    }
+    #endregion
+
+    #region Set Handlers
+    static string HandleSAdd(MiniRedis redis, string[] parts)
+    {
+        if (parts.Length < 3)
+            return "ERR wrong number of arguments for 'SADD' command";
+
+        try
+        {
+            var added = redis.SAdd(parts[1], parts[2..]);
+            return $"(integer) {added}";
+        }
+        catch (InvalidOperationException ex)
+        {
+            return $"ERR {ex.Message}";
+        }
+    }
+
+    static string HandleSIsMember(MiniRedis redis, string[] parts)
+    {
+        if (parts.Length != 3)
+            return "ERR wrong number of arguments for 'SISMEMBER' command";
+
+        try
+        {
+            var isMember = redis.SIsMember(parts[1], parts[2]);
+            return $"(integer) {(isMember ? 1 : 0)}";
+        }
+        catch (InvalidOperationException ex)
+        {
+            return $"ERR {ex.Message}";
+        }
+    }
+
+    static string HandleSMembers(MiniRedis redis, string[] parts)
+    {
+        if (parts.Length != 2)
+            return "ERR wrong number of arguments for 'SMEMBERS' command";
+
+        try
+        {
+            var members = redis.SMembers(parts[1]);
+            if (members == null || members.Count == 0)
+                return "(empty set or key does not exist)";
+
+            return string.Join("\n", members.Select((m, i) => $"{i + 1}) {m}"));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return $"ERR {ex.Message}";
+        }
+    }
+
+    static string HandleSCard(MiniRedis redis, string[] parts)
+    {
+        if (parts.Length != 2)
+            return "ERR wrong number of arguments for 'SCARD' command";
+
+        try
+        {
+            var count = redis.SCard(parts[1]);
+            return $"(integer) {count}";
+        }
+        catch (InvalidOperationException ex)
+        {
+            return $"ERR {ex.Message}";
+        }
+    }
+
+    static string HandleSRem(MiniRedis redis, string[] parts)
+    {
+        if (parts.Length < 3)
+            return "ERR wrong number of arguments for 'SREM' command";
+
+        try
+        {
+            var removed = redis.SRem(parts[1], parts[2..]);
+            return $"(integer) {removed}";
         }
         catch (InvalidOperationException ex)
         {
