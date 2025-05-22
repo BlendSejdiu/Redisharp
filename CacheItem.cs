@@ -11,7 +11,8 @@ namespace RedSharp
         String,
         List,
         Hash,
-        Set
+        Set,
+        SortedSet
     }
     public class CacheItem
     {
@@ -52,16 +53,21 @@ namespace RedSharp
                     if (!(value is HashSet<string>))
                         throw new ArgumentException("Set type requires HashSet<string> value");
                     break;
+                case DataType.SortedSet:
+                    if(!(value is SortedDictionary<double, HashSet<string>>))
+                        throw new ArgumentException("SortedSet type requires SortedDictionary<double, HashSet<string>>");
+                    break;
                 default:
                     throw new ArgumentException("Unknown data type");
             }
         }
 
+        
         public bool IsExpired() => ExpiryTime.HasValue && DateTime.UtcNow > ExpiryTime.Value;
-
         public string GetString() => Type == DataType.String ? (string)Value : throw new InvalidOperationException("Not a string");
         public List<string> GetList() => Type == DataType.List ? (List<string>)Value : throw new InvalidOperationException("Not a list");
         public Dictionary<string, string> GetHash() => Type == DataType.Hash ? (Dictionary<string, string>)Value : throw new InvalidOperationException("Not a hash");
         public HashSet<string> GetSet() => Type == DataType.Set ? (HashSet<string>)Value : throw new InvalidOperationException("Not a set");
+        public SortedDictionary<double, HashSet<string>> GetSortedSet() => Type == DataType.SortedSet ? (SortedDictionary<double, HashSet<string>>)Value : throw new InvalidOperationException("Not a sorted set");
     }
 }

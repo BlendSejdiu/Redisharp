@@ -50,10 +50,16 @@ class Program
                     "SMEMBERS" => HandleSMembers(redis, parts),
                     "SCARD" => HandleSCard(redis, parts),
                     "SREM" => HandleSRem(redis, parts),
+                    "ZADD" => HandleZAdd(redis, parts),
+                    "ZRANGE" => HandleZRange(redis, parts),
+                    "ZREVRANGE" => HandleZRange(redis, parts),
+                    "ZSCORE" => HandleZScore(redis, parts),
+                    "ZCOUNT" => HandleZCount(redis, parts),
+                    "ZREM" => HandleZRem(redis, parts),
                     "HELP" => "Available commands: SET, GET, DEL, EXISTS, TTL, INCR, " +
                               "LPUSH, RPUSH, LPOP, RPOP, LLEN, LRANGE, " +
                               "HSET, HGET, HGETALL, HDEL, HEXISTS, HLEN, " +
-                              "SADD, SREM, SMEMBERS, SISMEMBER, SCARD, " + 0"HELP, EXIT",
+                              "SADD, SREM, SMEMBERS, SISMEMBER, SCARD, " + "ZADD, ZRANGE, ZREVRANGE, ZSCORE, ZCOUNT, ZREM, " + "HELP, EXIT",
                     _ => $"Unknown command: {command}"
                 };
 
@@ -441,4 +447,122 @@ class Program
     }
     #endregion
 
+    #region Sorted Set Handlers
+
+    static string HandleZAdd(MiniRedis redis, string[] parts)
+    {
+        try
+        {
+            if (parts.Length < 4 || (parts.Length - 2) % 2 != 0)
+                return "ERR syntax: ZADD key score1 member1 [score2 member2 ...]";
+
+            var members = new Dictionary<string, double>();
+            for (int i = 2; i < parts.Length; i += 2)
+            {
+                if (!double.TryParse(parts[i], out var score))
+                    return "ERR invalid score";
+                members[parts[i + 1]] = score;
+            }
+
+            var added = redis.ZAdd(parts[1], members);
+            return $"(integer) {added}";
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("Not a sorted set"))
+        {
+            return "WRONGTYPE Operation against a key holding the wrong kind of value";
+        }
+        catch (Exception ex)
+        {
+            return $"ERR {ex.Message}";
+        }
+    }
+
+    static string HandleZRange(MiniRedis redis, string[] parts)
+    {
+        try
+        {
+            bool reverse = parts[0].Equals("ZREVRANGE", StringComparison.OrdinalIgnoreCase);
+
+            if (parts.Length < 4 || !double.TryParse(parts[2], out var start) ||
+                                   !double.TryParse(parts[3], out var stop))
+                return $"ERR syntax: {(reverse ? "ZREVRANGE" : "ZRANGE")} key start stop [WITHSCORES]";
+
+            bool withScores = parts.Length > 4 && parts[4].Equals("WITHSCORES", StringComparison.OrdinalIgnoreCase);
+            var range = redis.ZRange(parts[1], start, stop, withScores, reverse);
+
+            if (range.Count == 0) return "(empty list or set)";
+            return string.Join("\n", range.Select((x, i) => $"{i + 1}) {x}"));
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("Not a sorted set"))
+        {
+            return "WRONGTYPE Operation against a key holding the wrong kind of value";
+        }
+        catch (Exception ex)
+        {
+            return $"ERR {ex.Message}";
+        }
+    }
+
+    static string HandleZScore(MiniRedis redis, string[] parts)
+    {
+        try
+        {
+            if (parts.Length != 3)
+                return "ERR syntax: ZSCORE key member";
+
+            var score = redis.ZScore(parts[1], parts[2]);
+            return score.HasValue ? score.Value.ToString() : "(nil)";
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("Not a sorted set"))
+        {
+            return "WRONGTYPE Operation against a key holding the wrong kind of value";
+        }
+        catch (Exception ex)
+        {
+            return $"ERR {ex.Message}";
+        }
+    }
+
+    static string HandleZCount(MiniRedis redis, string[] parts)
+    {
+        try
+        {
+            if (parts.Length != 4 || !double.TryParse(parts[2], out var min) ||
+                                    !double.TryParse(parts[3], out var max))
+                return "ERR syntax: ZCOUNT key min max";
+
+            var count = redis.ZCount(parts[1], min, max);
+            return $"(integer) {count}";
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("Not a sorted set"))
+        {
+            return "WRONGTYPE Operation against a key holding the wrong kind of value";
+        }
+        catch (Exception ex)
+        {
+            return $"ERR {ex.Message}";
+        }
+    }
+
+    static string HandleZRem(MiniRedis redis, string[] parts)
+    {
+        try
+        {
+            if (parts.Length < 3)
+                return "ERR syntax: ZREM key member [member ...]";
+
+            var removed = redis.ZRem(parts[1], parts[2..]);
+            return $"(integer) {removed}";
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("Not a sorted set"))
+        {
+            return "WRONGTYPE Operation against a key holding the wrong kind of value";
+        }
+        catch (Exception ex)
+        {
+            return $"ERR {ex.Message}";
+        }
+    }
+
+    #endregion
 }

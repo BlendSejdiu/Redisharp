@@ -401,5 +401,120 @@ namespace RedSharp
             return result ?? new HashSet<string>();
         }
         #endregion
+
+        #region Sorted Set Operations
+
+        private SortedDictionary<double, HashSet<string>> GetOrCreateSortedSet(string key)
+        {
+            if (store.TryGetValue(key, out var item))
+                return item.GetSortedSet();
+
+            var newSet = new SortedDictionary<double, HashSet<string>>();
+            store[key] = new CacheItem(newSet, DataType.SortedSet);
+            return newSet;
+        }
+
+        public long ZAdd(string key, Dictionary<string, double> members)
+        {
+            var zset = GetOrCreateSortedSet(key);
+            long added = 0;
+
+            foreach (var member in members)
+            {
+                foreach (var kvp in zset.ToList())
+                    if (kvp.Value.Contains(member.Key))
+                    {
+                        kvp.Value.Remove(member.Key);
+                        if (kvp.Value.Count == 0)
+                            zset.Remove(kvp.Key);
+                        break;
+                    }
+
+                if (!zset.TryGetValue(member.Value, out var membersAtScore))
+                {
+                    membersAtScore = new HashSet<string>();
+                    zset[member.Value] = membersAtScore;
+                }
+
+                if (membersAtScore.Add(member.Key))
+                    added++;
+            }
+
+            return added;
+        }
+
+        public List<string> ZRange(string key, double start, double stop, bool withScores = false, bool reverse = false)
+        {
+            if (!store.TryGetValue(key, out var item)) 
+                return new List<string>();
+
+            var result = new List<string>();
+            var zset = item.GetSortedSet();
+            var range = zset.Where(e => e.Key >= start && e.Key <= stop);
+
+            if (reverse) range = range.Reverse();
+
+            foreach (var entry in range)
+            {
+                var members = reverse ? entry.Value.Reverse() : entry.Value;
+                foreach (var member in members)
+                    result.Add(member);
+                    if (withScores) result.Add(entry.Key.ToString());
+            }
+
+            return result;
+        }
+
+        public double? ZScore(string key, string member)
+        {
+            if (!store.TryGetValue(key, out var item)) 
+                return null;
+
+            var zset = item.GetSortedSet();
+            foreach (var entry in zset)
+                if (entry.Value.Contains(member))
+                    return entry.Key;
+
+            return null;
+        }
+
+        public long ZCount(string key, double min, double max)
+        {
+            if (!store.TryGetValue(key, out var item)) 
+                return 0;
+
+            return item.GetSortedSet()
+                      .Where(e => e.Key >= min && e.Key <= max)
+                      .Sum(e => e.Value.Count);
+        }
+
+        public long ZRem(string key, params string[] members)
+        {
+            if (!store.TryGetValue(key, out var item)) 
+                return 0;
+
+            var zset = item.GetSortedSet();
+            long removed = 0;
+
+            foreach (var member in members)
+            {
+                foreach (var entry in zset.ToList())
+                {
+                    if (entry.Value.Remove(member))
+                    {
+                        removed++;
+                        if (entry.Value.Count == 0)
+                        {
+                            zset.Remove(entry.Key);
+                        }
+                        break;
+                    }
+                }
+            }
+
+            return removed;
+        }
+
+        #endregion
     }
 }
