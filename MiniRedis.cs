@@ -9,21 +9,88 @@ namespace RedSharp
 {
     public class MiniRedis
     {
-        private ConcurrentDictionary<string, CacheItem> store = new();
+        private ConcurrentDictionary<string, CacheItem> _store = new();
+        private ExpiryManager expiryManager;
+
+        public MiniRedis()
+        {
+            expiryManager = new ExpiryManager(_store, TimeSpan.FromSeconds(60));
+        }
+
+        #region TTL
+        public void Stop()
+        {
+            _ = expiryManager.Dispose();
+        }
+        public bool Expired(string key, int seconds)
+        {
+            if (_store.TryGetValue(key, out var item))
+            {
+                if (item.IsExpired())
+                {
+                    _store.TryRemove(key, out _);
+                    return false;
+                }
+
+                item.ExpiryTime = DateTime.UtcNow.AddSeconds(seconds);
+                return true;
+            }
+            
+            return false;
+        }
+
+        public bool PExpire(string key, int miliseconds)
+        {
+            if (_store.TryGetValue(key, out var item))
+            {
+                if (item.IsExpired())
+                {
+                    _store.TryRemove(key, out _);
+                    return false;
+                }
+
+                item.ExpiryTime = DateTime.UtcNow.AddMilliseconds(miliseconds);
+                return true;
+            }
+
+            return false;
+        }
+
+        public bool Persist(string key)
+        {
+            if (_store.TryGetValue(key, out var item))
+            {
+                if (item.IsExpired())
+                {
+                    _store.TryRemove(key, out _);
+                    return false;
+                }
+
+                if (item.ExpiryTime.HasValue)
+                {
+                    item.ExpiryTime = null;
+                    return true;
+                }
+                return false;
+            }
+
+            return false;
+        }
+        #endregion
 
         #region String Operations
         public void Set(string key, string value, int? ttlSeconds = null)
         {
             DateTime? expiry = ttlSeconds.HasValue ? DateTime.UtcNow.AddSeconds(ttlSeconds.Value) : null;
-            store[key] = new CacheItem(value, expiry);
+            _store[key] = new CacheItem(value, expiry);
         }
         public string? Get(string key)
         {
-            if (store.TryGetValue(key, out var item))
+            if (_store.TryGetValue(key, out var item))
             {
                 if (item.IsExpired())
                 {
-                    store.TryRemove(key, out _);
+                    _store.TryRemove(key, out _);
                     return null;
                 }
                 return item.GetString();
@@ -36,16 +103,16 @@ namespace RedSharp
             if (keys == null || keys.Length == 0)
                 return 0;
 
-            return keys.Count(key => store.TryRemove(key, out _));
+            return keys.Count(key => _store.TryRemove(key, out _));
         }
 
         public bool Exists(string key)
         {
-            if (store.TryGetValue(key, out var item))
+            if (_store.TryGetValue(key, out var item))
             {
                 if (item.IsExpired())
                 {
-                    store.TryRemove(key, out _);
+                    _store.TryRemove(key, out _);
                     return false;
                 }
                 return true;
@@ -55,12 +122,12 @@ namespace RedSharp
 
         public long Ttl(string key)
         {
-            if (!store.TryGetValue(key, out var item))
+            if (!_store.TryGetValue(key, out var item))
                 return -2;
 
             if (item.IsExpired())
             {
-                store.TryRemove(key, out _);
+                _store.TryRemove(key, out _);
                 return -2;
             }
 
@@ -88,19 +155,30 @@ namespace RedSharp
         #region Helper Methods
         private List<string> GetOrCreateList(string key)
         {
-            if (store.TryGetValue(key, out var item))
-                return item.GetList();
+            if (_store.TryGetValue(key, out var item))
+            {
+                if (item.IsExpired())
+                    _store.TryRemove(key, out _);
+                else
+                    return item.GetList();
+            }
 
             var newList = new List<string>();
-            store[key] = new CacheItem(newList, DataType.List);
-            return newList;       
+            _store[key] = new CacheItem(newList, DataType.List);
+            return newList;
         }
 
         private bool TryGetValidList(string key, out List<string> list)
         {
             list = null;
-            if (!store.TryGetValue(key, out var item))
+            if (!_store.TryGetValue(key, out var item))
                 return false;
+
+            if (item.IsExpired())
+            {
+                _store.TryRemove(key, out _);
+                return false;
+            }
 
             try
             {
@@ -110,7 +188,7 @@ namespace RedSharp
             catch (InvalidOperationException)
             {
                 return false;
-            }            
+            }
         }
         #endregion
 
@@ -190,11 +268,16 @@ namespace RedSharp
         #region Helper Methods
         private Dictionary<string, string> GetOrCreateHash(string key)
         {
-            if (store.TryGetValue(key, out var item))
-                return item.GetHash();
+            if (_store.TryGetValue(key, out var item))
+            {
+                if (item.IsExpired())
+                    _store.TryRemove(key, out _);
+                else
+                    return item.GetHash();
+            }
 
             var newHash = new Dictionary<string, string>();
-            store[key] = new CacheItem(newHash, DataType.Hash);
+            _store[key] = new CacheItem(newHash, DataType.Hash);
             return newHash;
         }
         #endregion
@@ -222,8 +305,14 @@ namespace RedSharp
 
         public string? HGet(string key, string field)
         {
-            if (!store.TryGetValue(key, out var item))
+            if (!_store.TryGetValue(key, out var item))
                 return null;
+
+            if (item.IsExpired())
+            {
+                _store.TryRemove(key, out _);
+                return null;
+            }
 
             try
             {
@@ -238,8 +327,14 @@ namespace RedSharp
 
         public Dictionary<string, string>? HGetAll(string key)
         {
-            if (!store.TryGetValue(key, out var item))
+            if (!_store.TryGetValue(key, out var item))
                 return null;
+
+            if (item.IsExpired())
+            {
+                _store.TryRemove(key, out _);
+                return null;
+            }
 
             try
             {
@@ -253,8 +348,14 @@ namespace RedSharp
 
         public long HDel(string key, params string[] fields)
         {
-            if (!store.TryGetValue(key, out var item))
+            if (!_store.TryGetValue(key, out var item))
                 return 0;
+
+            if (item.IsExpired())
+            {
+                _store.TryRemove(key, out _);
+                return 0;
+            }
 
             try
             {
@@ -265,7 +366,7 @@ namespace RedSharp
                     if (hash.Remove(kvp))
                         deleted++;
 
-                return deleted;                 
+                return deleted;
             }
             catch (InvalidOperationException)
             {
@@ -275,8 +376,14 @@ namespace RedSharp
 
         public bool HExists(string key, string field)
         {
-            if (!store.TryGetValue(key, out var item))
+            if (!_store.TryGetValue(key, out var item))
                 return false;
+
+            if (item.IsExpired())
+            {
+                _store.TryRemove(key, out _);
+                return false;
+            }
 
             try
             {
@@ -290,8 +397,14 @@ namespace RedSharp
 
         public long HLen(string key)
         {
-            if (!store.TryGetValue(key, out var item))
+            if (!_store.TryGetValue(key, out var item))
                 return 0;
+
+            if (item.IsExpired())
+            {
+                _store.TryRemove(key, out _);
+                return 0;
+            }
 
             try
             {
@@ -309,19 +422,30 @@ namespace RedSharp
         #region Helper Methods
         private HashSet<string> GetOrCreateSet(string key)
         {
-            if (store.TryGetValue(key, out var item))
-                return item.GetSet();
+            if (_store.TryGetValue(key, out var item))
+            {
+                if (item.IsExpired())
+                    _store.TryRemove(key, out _);
+                else
+                    return item.GetSet();
+            }
 
-            var newHash = new HashSet<string>();
-            store[key] = new CacheItem(newHash, DataType.Set);
-            return newHash;
+            var newSet = new HashSet<string>();
+            _store[key] = new CacheItem(newSet, DataType.Set);
+            return newSet;
         }
 
         private bool TryGetValidSet(string key, out HashSet<string> set)
         {
             set = null;
-            if (!store.TryGetValue(key, out var item))
+            if (!_store.TryGetValue(key, out var item))
                 return false;
+
+            if (item.IsExpired())
+            {
+                _store.TryRemove(key, out _);
+                return false;
+            }
 
             try
             {
@@ -406,12 +530,40 @@ namespace RedSharp
 
         private SortedDictionary<double, HashSet<string>> GetOrCreateSortedSet(string key)
         {
-            if (store.TryGetValue(key, out var item))
-                return item.GetSortedSet();
+            if (_store.TryGetValue(key, out var item))
+            {
+                if (item.IsExpired())
+                    _store.TryRemove(key, out _);
+                else
+                    return item.GetSortedSet();
+            }
 
             var newSet = new SortedDictionary<double, HashSet<string>>();
-            store[key] = new CacheItem(newSet, DataType.SortedSet);
+            _store[key] = new CacheItem(newSet, DataType.SortedSet);
             return newSet;
+        }
+
+        private bool TryGetValidSortedSet(string key, out SortedDictionary<double, HashSet<string>> zset)
+        {
+            zset = null;
+            if (!_store.TryGetValue(key, out var item))
+                return false;
+
+            if (item.IsExpired())
+            {
+                _store.TryRemove(key, out _);
+                return false;
+            }
+
+            try
+            {
+                zset = item.GetSortedSet();
+                return true;
+            }
+            catch (InvalidOperationException)
+            {
+                return false;
+            }
         }
 
         public long ZAdd(string key, Dictionary<string, double> members)
@@ -422,9 +574,8 @@ namespace RedSharp
             foreach (var member in members)
             {
                 foreach (var kvp in zset.ToList())
-                    if (kvp.Value.Contains(member.Key))
+                    if (kvp.Value.Remove(member.Key))
                     {
-                        kvp.Value.Remove(member.Key);
                         if (kvp.Value.Count == 0)
                             zset.Remove(kvp.Key);
                         break;
@@ -445,21 +596,22 @@ namespace RedSharp
 
         public List<string> ZRange(string key, double start, double stop, bool withScores = false, bool reverse = false)
         {
-            if (!store.TryGetValue(key, out var item)) 
+            if (!TryGetValidSortedSet(key, out var zset))
                 return new List<string>();
 
             var result = new List<string>();
-            var zset = item.GetSortedSet();
             var range = zset.Where(e => e.Key >= start && e.Key <= stop);
-
             if (reverse) range = range.Reverse();
 
             foreach (var entry in range)
             {
                 var members = reverse ? entry.Value.Reverse() : entry.Value;
                 foreach (var member in members)
+                {
                     result.Add(member);
-                    if (withScores) result.Add(entry.Key.ToString());
+                    if (withScores)
+                        result.Add(entry.Key.ToString());
+                }
             }
 
             return result;
@@ -467,10 +619,9 @@ namespace RedSharp
 
         public double? ZScore(string key, string member)
         {
-            if (!store.TryGetValue(key, out var item)) 
+            if (!TryGetValidSortedSet(key, out var zset))
                 return null;
 
-            var zset = item.GetSortedSet();
             foreach (var entry in zset)
                 if (entry.Value.Contains(member))
                     return entry.Key;
@@ -480,53 +631,45 @@ namespace RedSharp
 
         public long ZCount(string key, double min, double max)
         {
-            if (!store.TryGetValue(key, out var item)) 
+            if (!TryGetValidSortedSet(key, out var zset))
                 return 0;
 
-            return item.GetSortedSet()
-                      .Where(e => e.Key >= min && e.Key <= max)
-                      .Sum(e => e.Value.Count);
+            return zset.Where(e => e.Key >= min && e.Key <= max).Sum(e => e.Value.Count);
         }
-
         public long ZRem(string key, params string[] members)
         {
-            if (!store.TryGetValue(key, out var item)) 
+            if (!TryGetValidSortedSet(key, out var zset))
                 return 0;
 
-            var zset = item.GetSortedSet();
             long removed = 0;
-
             foreach (var member in members)
+            {
                 foreach (var entry in zset.ToList())
+                {
                     if (entry.Value.Remove(member))
                     {
                         removed++;
                         if (entry.Value.Count == 0)
                             zset.Remove(entry.Key);
-
                         break;
                     }
+                }
+            }
 
             return removed;
         }
-
-
         public List<string> ZRangeByScore(string key, double min, double max, bool withScores = false, int offset = 0, int count = int.MaxValue)
         {
-            if (!store.TryGetValue(key, out var item))
+            if (!TryGetValidSortedSet(key, out var zset))
                 return new List<string>();
 
             var result = new List<string>();
-            var zset = item.GetSortedSet();
-            int itemsSkipped = 0;
-            int itemsAdded = 0;
+            int itemsSkipped = 0, itemsAdded = 0;
 
             foreach (var entry in zset)
             {
-                if (entry.Key < min)
-                    continue;
-                if (entry.Key > max)
-                    break;
+                if (entry.Key < min) continue;
+                if (entry.Key > max) break;
 
                 foreach (var member in entry.Value)
                 {
@@ -589,17 +732,13 @@ namespace RedSharp
 
             foreach (var kvp in keysWithWeights)
             {
-                if (!store.TryGetValue(kvp.Key, out var item)) 
-                    continue;
-
-                var weight = kvp.Value;
-                var zset = item.GetSortedSet();
+                if (!TryGetValidSortedSet(kvp.Key, out var zset)) continue;
 
                 foreach (var entry in zset)
                 {
                     foreach (var member in entry.Value)
                     {
-                        var weightedScore = entry.Key * weight;
+                        var weightedScore = entry.Key * kvp.Value;
 
                         if (!merged.TryGetValue(member, out var currentScore))
                         {
@@ -630,13 +769,13 @@ namespace RedSharp
                 members.Add(kvp.Key);
             }
 
-            store[destination] = new CacheItem(result, DataType.SortedSet);
+            _store[destination] = new CacheItem(result, DataType.SortedSet);
             return merged.Count;
         }
 
         public long ZInterStore(string destination, Dictionary<string, double> keysWithWeights, AggregateType aggregate = AggregateType.Sum)
         {
-            if (keysWithWeights.Count == 0) 
+            if (keysWithWeights.Count == 0)
                 return 0;
 
             var commonMembers = new HashSet<string>();
@@ -644,11 +783,10 @@ namespace RedSharp
 
             foreach (var kvp in keysWithWeights)
             {
-                if (!store.TryGetValue(kvp.Key, out var item)) return 0;
+                if (!TryGetValidSortedSet(kvp.Key, out var zset))
+                    return 0;
 
                 var currentMembers = new HashSet<string>();
-                var zset = item.GetSortedSet();
-
                 foreach (var entry in zset)
                     foreach (var member in entry.Value)
                         currentMembers.Add(member);
@@ -672,7 +810,9 @@ namespace RedSharp
 
                 foreach (var kvp in keysWithWeights)
                 {
-                    var zset = store[kvp.Key].GetSortedSet();
+                    if (!TryGetValidSortedSet(kvp.Key, out var zset))
+                        continue;
+
                     foreach (var entry in zset)
                     {
                         if (entry.Value.Contains(member))
@@ -703,7 +843,7 @@ namespace RedSharp
                 }
             }
 
-            store[destination] = new CacheItem(result, DataType.SortedSet);
+            _store[destination] = new CacheItem(result, DataType.SortedSet);
             return commonMembers.Count;
         }
 

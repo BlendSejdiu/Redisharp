@@ -8,7 +8,7 @@ class Program
     static void Main()
     {
         var redis = new MiniRedis();
-
+       
         Console.WriteLine("Mini Redis-like Cache DB using C# (type 'exit' to quit or 'help' to see commands)");
 
         while (true)
@@ -61,6 +61,9 @@ class Program
                     "ZINCRBY" => HandleZIncrBy(redis, parts),
                     "ZUNIONSTORE" => HandleZUnionStore(redis, parts),
                     "ZINTERSTORE" => HandleZInterStore(redis, parts),
+                    "EXPIRE" => HandleExpire(redis, parts),
+                    "PEXPIRE" => HandlePExpire(redis, parts),
+                    "PERSIST" => HandlePersist(redis, parts),
                     "HELP" => "Available commands: SET, GET, DEL, EXISTS, TTL, INCR, " +
                               "LPUSH, RPUSH, LPOP, RPOP, LLEN, LRANGE, " +
                               "HSET, HGET, HGETALL, HDEL, HEXISTS, HLEN, " +
@@ -75,6 +78,8 @@ class Program
                 Console.WriteLine($"Error: {ex.Message}");
             }
         }
+
+        redis.Stop();
     }
 
     #region String Handlers
@@ -776,6 +781,37 @@ class Program
         {
             return $"ERR {ex.Message}";
         }
+    }
+
+    #endregion
+
+    #region TTL
+
+    static string HandleExpire(MiniRedis redis, string[] parts)
+    {
+        if (parts.Length != 3 || !int.TryParse(parts[2], out int seconds))
+            return "Usage: EXPIRE key seconds";
+
+        bool result = redis.Expired(parts[1], seconds);
+        return result ? "1" : "0"; 
+    }
+
+    static string HandlePExpire(MiniRedis redis, string[] parts)
+    {
+        if (parts.Length != 3 || !int.TryParse(parts[2], out int milliseconds))
+            return "Usage: PEXPIRE key milliseconds";
+
+        bool result = redis.PExpire(parts[1], milliseconds);
+        return result ? "1" : "0";
+    }
+
+    static string HandlePersist(MiniRedis redis, string[] parts)
+    {
+        if (parts.Length != 2)
+            return "Usage: PERSIST key";
+
+        bool result = redis.Persist(parts[1]);
+        return result ? "1" : "0"; 
     }
 
     #endregion
