@@ -497,23 +497,217 @@ namespace RedSharp
             long removed = 0;
 
             foreach (var member in members)
-            {
                 foreach (var entry in zset.ToList())
-                {
                     if (entry.Value.Remove(member))
                     {
                         removed++;
                         if (entry.Value.Count == 0)
-                        {
                             zset.Remove(entry.Key);
-                        }
+
                         break;
+                    }
+
+            return removed;
+        }
+
+
+        public List<string> ZRangeByScore(string key, double min, double max, bool withScores = false, int offset = 0, int count = int.MaxValue)
+        {
+            if (!store.TryGetValue(key, out var item))
+                return new List<string>();
+
+            var result = new List<string>();
+            var zset = item.GetSortedSet();
+            int itemsSkipped = 0;
+            int itemsAdded = 0;
+
+            foreach (var entry in zset)
+            {
+                if (entry.Key < min)
+                    continue;
+                if (entry.Key > max)
+                    break;
+
+                foreach (var member in entry.Value)
+                {
+                    if (itemsSkipped < offset)
+                    {
+                        itemsSkipped++;
+                        continue;
+                    }
+
+                    if (itemsAdded >= count)
+                        return result;
+
+                    result.Add(member);
+                    if (withScores)
+                        result.Add(entry.Key.ToString());
+
+                    itemsAdded++;
+                }
+            }
+
+            return result;
+        }
+
+        public double ZIncrBy(string key, string member, double increment)
+        {
+            var zset = GetOrCreateSortedSet(key);
+            double currentScore = 0;
+            bool memberExists = false;
+
+            foreach (var entry in zset.ToList())
+            {
+                if (entry.Value.Contains(member))
+                {
+                    currentScore = entry.Key;
+                    entry.Value.Remove(member);
+
+                    if (entry.Value.Count == 0)
+                        zset.Remove(entry.Key);
+
+                    memberExists = true;
+                    break;
+                }
+            }
+
+            double newScore = currentScore + increment;
+
+            if (!zset.TryGetValue(newScore, out var members))
+            {
+                members = new HashSet<string>();
+                zset[newScore] = members;
+            }
+            members.Add(member);
+
+            return newScore;
+        }
+
+        public long ZUnionStore(string destination, Dictionary<string, double> keysWithWeights, AggregateType aggregate = AggregateType.Sum)
+        {
+            var merged = new Dictionary<string, double>();
+
+            foreach (var kvp in keysWithWeights)
+            {
+                if (!store.TryGetValue(kvp.Key, out var item)) 
+                    continue;
+
+                var weight = kvp.Value;
+                var zset = item.GetSortedSet();
+
+                foreach (var entry in zset)
+                {
+                    foreach (var member in entry.Value)
+                    {
+                        var weightedScore = entry.Key * weight;
+
+                        if (!merged.TryGetValue(member, out var currentScore))
+                        {
+                            merged[member] = weightedScore;
+                        }
+                        else
+                        {
+                            merged[member] = aggregate switch
+                            {
+                                AggregateType.Sum => currentScore + weightedScore,
+                                AggregateType.Min => Math.Min(currentScore, weightedScore),
+                                AggregateType.Max => Math.Max(currentScore, weightedScore),
+                                _ => currentScore + weightedScore
+                            };
+                        }
                     }
                 }
             }
 
-            return removed;
+            var result = new SortedDictionary<double, HashSet<string>>();
+            foreach (var kvp in merged)
+            {
+                if (!result.TryGetValue(kvp.Value, out var members))
+                {
+                    members = new HashSet<string>();
+                    result[kvp.Value] = members;
+                }
+                members.Add(kvp.Key);
+            }
+
+            store[destination] = new CacheItem(result, DataType.SortedSet);
+            return merged.Count;
         }
+
+        public long ZInterStore(string destination, Dictionary<string, double> keysWithWeights, AggregateType aggregate = AggregateType.Sum)
+        {
+            if (keysWithWeights.Count == 0) 
+                return 0;
+
+            var commonMembers = new HashSet<string>();
+            bool firstSet = true;
+
+            foreach (var kvp in keysWithWeights)
+            {
+                if (!store.TryGetValue(kvp.Key, out var item)) return 0;
+
+                var currentMembers = new HashSet<string>();
+                var zset = item.GetSortedSet();
+
+                foreach (var entry in zset)
+                    foreach (var member in entry.Value)
+                        currentMembers.Add(member);
+
+                if (firstSet)
+                {
+                    commonMembers.UnionWith(currentMembers);
+                    firstSet = false;
+                }
+                else
+                {
+                    commonMembers.IntersectWith(currentMembers);
+                    if (commonMembers.Count == 0) break;
+                }
+            }
+
+            var result = new SortedDictionary<double, HashSet<string>>();
+            foreach (var member in commonMembers)
+            {
+                double? aggregatedScore = null;
+
+                foreach (var kvp in keysWithWeights)
+                {
+                    var zset = store[kvp.Key].GetSortedSet();
+                    foreach (var entry in zset)
+                    {
+                        if (entry.Value.Contains(member))
+                        {
+                            var weightedScore = entry.Key * kvp.Value;
+                            aggregatedScore = aggregatedScore.HasValue
+                                ? aggregate switch
+                                {
+                                    AggregateType.Sum => aggregatedScore + weightedScore,
+                                    AggregateType.Min => Math.Min(aggregatedScore.Value, weightedScore),
+                                    AggregateType.Max => Math.Max(aggregatedScore.Value, weightedScore),
+                                    _ => aggregatedScore + weightedScore
+                                }
+                                : weightedScore;
+                            break;
+                        }
+                    }
+                }
+
+                if (aggregatedScore.HasValue)
+                {
+                    if (!result.TryGetValue(aggregatedScore.Value, out var members))
+                    {
+                        members = new HashSet<string>();
+                        result[aggregatedScore.Value] = members;
+                    }
+                    members.Add(member);
+                }
+            }
+
+            store[destination] = new CacheItem(result, DataType.SortedSet);
+            return commonMembers.Count;
+        }
+
+        public enum AggregateType { Sum, Min, Max }
 
         #endregion
     }

@@ -1,6 +1,7 @@
 ﻿
 using RedSharp;
 using System.Collections.Generic;
+using static RedSharp.MiniRedis;
 
 class Program
 {
@@ -56,10 +57,14 @@ class Program
                     "ZSCORE" => HandleZScore(redis, parts),
                     "ZCOUNT" => HandleZCount(redis, parts),
                     "ZREM" => HandleZRem(redis, parts),
+                    "ZRANGEBYSCORE" => HandleZRangeByScore(redis, parts),
+                    "ZINCRBY" => HandleZIncrBy(redis, parts),
+                    "ZUNIONSTORE" => HandleZUnionStore(redis, parts),
+                    "ZINTERSTORE" => HandleZInterStore(redis, parts),
                     "HELP" => "Available commands: SET, GET, DEL, EXISTS, TTL, INCR, " +
                               "LPUSH, RPUSH, LPOP, RPOP, LLEN, LRANGE, " +
                               "HSET, HGET, HGETALL, HDEL, HEXISTS, HLEN, " +
-                              "SADD, SREM, SMEMBERS, SISMEMBER, SCARD, " + "ZADD, ZRANGE, ZREVRANGE, ZSCORE, ZCOUNT, ZREM, " + "HELP, EXIT",
+                              "SADD, SREM, SMEMBERS, SISMEMBER, SCARD, " + "ZADD, ZRANGE, ZREVRANGE, ZSCORE, ZCOUNT, ZREM, ZRANGEBYSCORE, ZINCRBY, ZUNIONSTORE, ZINTERSTORE, " + "HELP, EXIT",
                     _ => $"Unknown command: {command}"
                 };
 
@@ -553,6 +558,215 @@ class Program
 
             var removed = redis.ZRem(parts[1], parts[2..]);
             return $"(integer) {removed}";
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("Not a sorted set"))
+        {
+            return "WRONGTYPE Operation against a key holding the wrong kind of value";
+        }
+        catch (Exception ex)
+        {
+            return $"ERR {ex.Message}";
+        }
+    }
+
+    static string HandleZRangeByScore(MiniRedis redis, string[] parts)
+    {
+        try
+        {
+            if (parts.Length < 4)
+                return "ERR wrong number of arguments for 'ZRANGEBYSCORE' command";
+
+            double min, max;
+            try
+            {
+                min = parts[2].Equals("-inf", StringComparison.OrdinalIgnoreCase)
+                    ? double.NegativeInfinity
+                    : double.Parse(parts[2]);
+                max = parts[3].Equals("+inf", StringComparison.OrdinalIgnoreCase)
+                    ? double.PositiveInfinity
+                    : double.Parse(parts[3]);
+            }
+            catch (FormatException)
+            {
+                return "ERR min or max is not a float";
+            }
+
+            bool withScores = false;
+            int offset = 0;
+            int count = int.MaxValue;
+
+            for (int i = 4; i < parts.Length; i++)
+            {
+                if (parts[i].Equals("WITHSCORES", StringComparison.OrdinalIgnoreCase))
+                {
+                    withScores = true;
+                }
+                else if (parts[i].Equals("LIMIT", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (i + 2 >= parts.Length)
+                        return "ERR syntax error with LIMIT";
+
+                    if (!int.TryParse(parts[i + 1], out offset) ||
+                        !int.TryParse(parts[i + 2], out count))
+                        return "ERR limit offset/count must be integers";
+
+                    if (offset < 0 || count < 0)
+                        return "ERR limit offset/count must be >= 0";
+
+                    i += 2;
+                }
+            }
+
+            var range = redis.ZRangeByScore(parts[1], min, max, withScores, offset, count);
+
+            return range.Count == 0
+                ? "(empty list or set)"
+                : string.Join("\n", range.Select((x, i) => $"{i + 1}) {x}"));
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("Not a sorted set"))
+        {
+            return "WRONGTYPE Operation against a key holding the wrong kind of value";
+        }
+        catch (Exception ex)
+        {
+            return $"ERR {ex.Message}";
+        }
+    }
+
+    static string HandleZIncrBy(MiniRedis redis, string[] parts)
+    {
+        try
+        {
+            if (parts.Length != 4)
+                return "ERR wrong number of arguments for 'ZINCRBY' command";
+
+            string key = parts[1];
+            string incrementStr = parts[2];
+            string member = parts[3];
+
+            if (!double.TryParse(incrementStr, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double increment))
+                return $"ERR value is not a valid float: {incrementStr}";
+
+            double newScore = redis.ZIncrBy(key, member, increment);
+            return newScore.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("Not a sorted set"))
+        {
+            return "WRONGTYPE Operation against a key holding the wrong kind of value";
+        }
+        catch (Exception ex)
+        {
+            return $"ERR {ex.Message}";
+        }
+    }
+
+    static string HandleZUnionStore(MiniRedis redis, string[] parts)
+    {
+        try
+        {
+            if (parts.Length < 4)
+                return "ERR wrong number of arguments for 'ZUNIONSTORE' command";
+
+            if (!int.TryParse(parts[2], out var numKeys) || numKeys <= 0)
+                return "ERR numkeys must be a positive integer";
+
+            if (3 + numKeys > parts.Length)
+                return "ERR syntax error";
+
+            var keysWithWeights = new Dictionary<string, double>();
+            for (int i = 0; i < numKeys; i++)
+                keysWithWeights[parts[3 + i]] = 1.0;
+
+            var aggregate = AggregateType.Sum;
+            int currentIndex = 3 + numKeys;
+
+            if (currentIndex < parts.Length && parts[currentIndex].Equals("WEIGHTS", StringComparison.OrdinalIgnoreCase))
+            {
+                currentIndex++;
+                for (int i = 0; i < numKeys && currentIndex < parts.Length; i++)
+                {
+                    if (double.TryParse(parts[currentIndex], out var weight))
+                        keysWithWeights[parts[3 + i]] = weight;
+
+                    currentIndex++;
+                }
+            }
+
+            if (currentIndex < parts.Length && parts[currentIndex].Equals("AGGREGATE", StringComparison.OrdinalIgnoreCase))
+            {
+                currentIndex++;
+                if (currentIndex < parts.Length)
+                {
+                    aggregate = parts[currentIndex].ToUpper() switch
+                    {
+                        "MIN" => AggregateType.Min,
+                        "MAX" => AggregateType.Max,
+                        _ => AggregateType.Sum
+                    };
+                }
+            }
+
+            var count = redis.ZUnionStore(parts[1], keysWithWeights, aggregate);
+            return $"(integer) {count}";
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("Not a sorted set"))
+        {
+            return "WRONGTYPE Operation against a key holding the wrong kind of value";
+        }
+        catch (Exception ex)
+        {
+            return $"ERR {ex.Message}";
+        }
+    }
+
+    static string HandleZInterStore(MiniRedis redis, string[] parts)
+    {
+        try
+        {
+            if (parts.Length < 4)
+                return "ERR wrong number of arguments for 'ZINTERSTORE' command";
+
+            if (!int.TryParse(parts[2], out var numKeys) || numKeys <= 0)
+                return "ERR numkeys must be a positive integer";
+
+            if (3 + numKeys > parts.Length)
+                return "ERR syntax error";
+
+            var keysWithWeights = new Dictionary<string, double>();
+            for (int i = 0; i < numKeys; i++)
+                keysWithWeights[parts[3 + i]] = 1.0;
+
+            var aggregate = AggregateType.Sum;
+            int currentIndex = 3 + numKeys;
+
+            if (currentIndex < parts.Length && parts[currentIndex].Equals("WEIGHTS", StringComparison.OrdinalIgnoreCase))
+            {
+                currentIndex++;
+                for (int i = 0; i < numKeys && currentIndex < parts.Length; i++)
+                {
+                    if (double.TryParse(parts[currentIndex], out var weight))
+                        keysWithWeights[parts[3 + i]] = weight;
+
+                    currentIndex++;
+                }
+            }
+
+            if (currentIndex < parts.Length && parts[currentIndex].Equals("AGGREGATE", StringComparison.OrdinalIgnoreCase))
+            {
+                currentIndex++;
+                if (currentIndex < parts.Length)
+                {
+                    aggregate = parts[currentIndex].ToUpper() switch
+                    {
+                        "MIN" => AggregateType.Min,
+                        "MAX" => AggregateType.Max,
+                        _ => AggregateType.Sum
+                    };
+                }
+            }
+
+            var count = redis.ZInterStore(parts[1], keysWithWeights, aggregate);
+            return $"(integer) {count}";
         }
         catch (InvalidOperationException ex) when (ex.Message.Contains("Not a sorted set"))
         {
