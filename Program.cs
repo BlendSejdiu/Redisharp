@@ -1,16 +1,28 @@
-﻿
-using RedSharp;
-using System.Collections.Generic;
+﻿using RedSharp;
 using static RedSharp.MiniRedis;
 
 class Program
 {
-    static void Main()
+    static async Task Main()
     {
-        var redis = new MiniRedis();
-       
+        await using var redis = new MiniRedis();
+
         Console.WriteLine("Mini Redis-like Cache DB using C# (type 'exit' to quit or 'help' to see commands)");
 
+        try
+        {
+            await ProcessCommands(redis);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Fatal error: {ex.Message}");
+        }
+
+        redis.Stop();
+    }
+
+    public static async Task ProcessCommands(MiniRedis redis)
+    {
         while (true)
         {
             Console.Write("> ");
@@ -23,8 +35,11 @@ class Program
 
             try
             {
+                redis.LogCommand(input);
+
                 var parts = input.Split(' ');
                 var command = parts[0].ToUpper();
+
 
                 var response = command switch
                 {
@@ -78,9 +93,46 @@ class Program
                 Console.WriteLine($"Error: {ex.Message}");
             }
         }
-
-        redis.Stop();
     }
+
+    #region Persistence Command Handlers
+    private static async Task<string> HandleSave(MiniRedis redis)
+    {
+        try
+        {
+            await redis.SaveAsync();
+            return "OK";
+        }
+        catch (Exception ex)
+        {
+            return $"ERR {ex.Message}";
+        }
+    }
+
+    private static async Task<string> HandleBgSave(MiniRedis redis)
+    {
+        try
+        {
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await redis.SaveAsync();
+                    Console.WriteLine("Background save completed");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Background save failed: {ex.Message}");
+                }
+            });
+            return "Background saving started";
+        }
+        catch (Exception ex)
+        {
+            return $"ERR {ex.Message}";
+        }
+    }
+    #endregion
 
     #region String Handlers
     static string HandleSet(MiniRedis redis, string[] parts)
@@ -786,7 +838,6 @@ class Program
     #endregion
 
     #region TTL
-
     static string HandleExpire(MiniRedis redis, string[] parts)
     {
         if (parts.Length != 3 || !int.TryParse(parts[2], out int seconds))
@@ -813,6 +864,5 @@ class Program
         bool result = redis.Persist(parts[1]);
         return result ? "1" : "0"; 
     }
-
     #endregion
 }

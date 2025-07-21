@@ -1,10 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-
-namespace RedSharp
+﻿namespace RedSharp
 {
     public enum DataType
     {
@@ -61,8 +55,7 @@ namespace RedSharp
                     throw new ArgumentException("Unknown data type");
             }
         }
-
-        
+   
         public bool IsExpired() => ExpiryTime.HasValue && DateTime.UtcNow > ExpiryTime.Value;
         public string GetString() => Type == DataType.String ? (string)Value : throw new InvalidOperationException("Not a string");
         public List<string> GetList() => Type == DataType.List ? (List<string>)Value : throw new InvalidOperationException("Not a list");

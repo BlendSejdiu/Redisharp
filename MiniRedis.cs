@@ -2,25 +2,133 @@
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading.Tasks;
 
 namespace RedSharp
 {
-    public class MiniRedis
+    public class MiniRedis : IAsyncDisposable
     {
-        private ConcurrentDictionary<string, CacheItem> _store = new();
-        private ExpiryManager expiryManager;
+        private readonly ConcurrentDictionary<string, CacheItem> _store = new();
+        private readonly ExpiryManager _expiryManager;
+        private readonly PersistenceManager _persistenceManager;
+        private bool _disposed = false;
+        private readonly Task _initializationTask;
 
-        public MiniRedis()
+        public MiniRedis(
+            string workingDirectory = "data",
+            TimeSpan? rdbInterval = null,
+            AofManager.AofSyncMode aofSyncMode = AofManager.AofSyncMode.EverySecond,
+            TimeSpan? expiryCheckInterval = null)
         {
-            expiryManager = new ExpiryManager(_store, TimeSpan.FromSeconds(60));
+            _expiryManager = new ExpiryManager(_store, expiryCheckInterval ?? TimeSpan.FromSeconds(60));
+            _persistenceManager = new PersistenceManager(
+                _store,
+                workingDirectory,
+                rdbInterval,
+                aofSyncMode: aofSyncMode);
+
+            _initializationTask = InitializePersistenceAsync();
         }
+
+        #region Persistence
+        private async Task InitializePersistenceAsync()
+        {
+            try
+            {
+                await _persistenceManager.InitializeAsync();
+                Console.WriteLine("Persistence initialized successfully");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Failed to initialize persistence: {ex.Message}");
+                throw;
+            }
+        }
+
+        public void LogCommand(string command)
+        {
+            if (_disposed)
+                throw new ObjectDisposedException(nameof(MiniRedis));
+
+            if (string.IsNullOrWhiteSpace(command))
+            {
+                Console.WriteLine("Warning: Attempted to log empty command");
+                return;
+            }
+
+            try
+            {
+                _persistenceManager.LogCommand(command);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error logging command: {ex.Message}");
+                throw;
+            }
+        }
+
+        public async Task SaveAsync()
+        {
+            if (_disposed)
+                throw new ObjectDisposedException(nameof(MiniRedis));
+
+            try
+            {
+                await _persistenceManager.ForcePersistAsync();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error during save: {ex.Message}");
+                throw;
+            }
+        }
+
+        public async Task WaitForInitializationAsync()
+        {
+            if (_disposed)
+                throw new ObjectDisposedException(nameof(MiniRedis));
+
+            await _initializationTask;
+        }
+        #endregion
+
+        #region Cleanup
+        public async Task ShutdownAsync()
+        {
+            if (_disposed) 
+                return;
+
+            try
+            {
+                await Task.WhenAll(
+                    _persistenceManager.DisposeAsync().AsTask(),
+                    _expiryManager.Dispose());
+            }
+            finally
+            {
+                _disposed = true;
+            }
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            await ShutdownAsync();
+            GC.SuppressFinalize(this);
+        }
+
+        ~MiniRedis()
+        {
+            if (!_disposed)
+                DisposeAsync().AsTask().Wait();
+        }
+        #endregion
 
         #region TTL
         public void Stop()
         {
-            _ = expiryManager.Dispose();
+            _ = _expiryManager.Dispose();
         }
         public bool Expired(string key, int seconds)
         {
@@ -527,7 +635,6 @@ namespace RedSharp
         #endregion
 
         #region Sorted Set Operations
-
         private SortedDictionary<double, HashSet<string>> GetOrCreateSortedSet(string key)
         {
             if (_store.TryGetValue(key, out var item))
