@@ -285,362 +285,384 @@ namespace RedSharp
                 string line;
                 while ((line = reader.ReadLine()) != null)
                 {
+                    // Skip empty lines and comments
+                    line = line.Trim();
+                    if (string.IsNullOrEmpty(line) || line.StartsWith("#"))
+                        continue;
+
                     var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
                     if (parts.Length == 0)
                         continue;
 
-                    var command = parts[0].ToUpper();
+                    var command = parts[0].ToUpperInvariant();
+                    
+                    // Validate key format - keys should not contain null bytes or control characters
+                    bool IsValidKey(string key) => !string.IsNullOrEmpty(key) && 
+                                                   key.Length <= 512 && 
+                                                   key.IndexOfAny(new[] { '\0', '\n', '\r' }) < 0;
 
-                    switch (command)
+                    try
                     {
-                        case "SET":
-                            if (parts.Length >= 3)
-                            {
-                                var key = parts[1];
-                                var value = parts[2];
-                                DateTime? expiry = null;
-
-                                for (int i = 3; i < parts.Length; i++)
+                        switch (command)
+                        {
+                            case "SET":
+                                if (parts.Length >= 3 && IsValidKey(parts[1]))
                                 {
-                                    if (parts[i].ToUpper() == "EX" && i + 1 < parts.Length)
+                                    var key = parts[1];
+                                    var value = parts[2];
+                                    DateTime? expiry = null;
+
+                                    for (int i = 3; i < parts.Length; i++)
                                     {
-                                        if (int.TryParse(parts[i + 1], out var ex))
-                                            expiry = DateTime.UtcNow.AddSeconds(ex);
-                                        break;
-                                    }
-                                }
-
-                                _store[key] = new CacheItem(value, expiry);
-                            }
-                            break;
-
-                        case "DEL":
-                            if (parts.Length >= 2)
-                                foreach (var key in parts.Skip(1))
-                                    _store.TryRemove(key, out _);
-                            break;
-
-                        case "EXPIRE":
-                            if (parts.Length >= 3)
-                            {
-                                var key = parts[1];
-                                if (int.TryParse(parts[2], out var seconds) && _store.TryGetValue(key, out var item))
-                                    item.ExpiryTime = DateTime.UtcNow.AddSeconds(seconds);
-                            }
-                            break;
-
-                        case "PEXPIRE":
-                            if (parts.Length >= 3)
-                            {
-                                var key = parts[1];
-                                if (int.TryParse(parts[2], out var milliseconds) && _store.TryGetValue(key, out var item))
-                                    item.ExpiryTime = DateTime.UtcNow.AddMilliseconds(milliseconds);
-                            }
-                            break;
-
-                        case "PERSIST":
-                            if (parts.Length >= 2)
-                            {
-                                var key = parts[1];
-                                if (_store.TryGetValue(key, out var item))
-                                    item.ExpiryTime = null;
-                            }
-                            break;
-
-                        case "LPUSH":
-                            if (parts.Length >= 3)
-                            {
-                                var key = parts[1];
-                                var values = parts.Skip(2).ToArray();
-
-                                if (_store.TryGetValue(key, out var existingItem) && existingItem.Type == DataType.List)
-                                {
-                                    var list = existingItem.GetList();
-                                    list.InsertRange(0, values);
-                                }
-                                else
-                                {
-                                    var newList = new List<string>(values);
-                                    _store[key] = new CacheItem(newList, DataType.List, null);
-                                }
-                            }
-                            break;
-
-                        case "RPUSH":
-                            if (parts.Length >= 3)
-                            {
-                                var key = parts[1];
-                                var values = parts.Skip(2).ToArray();
-
-                                if (_store.TryGetValue(key, out var existingItem) && existingItem.Type == DataType.List)
-                                {
-                                    var list = existingItem.GetList();
-                                    list.AddRange(values);
-                                }
-                                else
-                                {
-                                    var newList = new List<string>(values);
-                                    _store[key] = new CacheItem(newList, DataType.List, null);
-                                }
-                            }
-                            break;
-
-                        case "LPOP":
-                            if (parts.Length >= 2)
-                            {
-                                var key = parts[1];
-                                if (_store.TryGetValue(key, out var item) && item.Type == DataType.List)
-                                {
-                                    var list = item.GetList();
-                                    if (list.Count > 0)
-                                    {
-                                        list.RemoveAt(0);
-                                        if (list.Count == 0)
-                                            _store.TryRemove(key, out _);
-                                    }
-                                }
-                            }
-                            break;
-
-                        case "RPOP":
-                            if (parts.Length >= 2)
-                            {
-                                var key = parts[1];
-                                if (_store.TryGetValue(key, out var item) && item.Type == DataType.List)
-                                {
-                                    var list = item.GetList();
-                                    if (list.Count > 0)
-                                    {
-                                        list.RemoveAt(list.Count - 1);
-                                        if (list.Count == 0)
-                                            _store.TryRemove(key, out _);
-                                    }
-                                }
-                            }
-                            break;
-
-                        case "HSET":
-                            if (parts.Length >= 4)
-                            {
-                                var key = parts[1];
-                                var field = parts[2];
-                                var value = parts[3];
-
-                                if (_store.TryGetValue(key, out var existingItem) && existingItem.Type == DataType.Hash)
-                                {
-                                    var hash = existingItem.GetHash();
-                                    hash[field] = value;
-                                }
-                                else
-                                {
-                                    var hash = new Dictionary<string, string> { [field] = value };
-                                    _store[key] = new CacheItem(hash, DataType.Hash, null);
-                                }
-                            }
-                            break;
-
-                        case "HMSET":
-                            if (parts.Length >= 3 && parts.Length % 2 == 1)
-                            {
-                                var key = parts[1];
-                                var hash = new Dictionary<string, string>();
-                                for (int i = 2; i < parts.Length; i += 2)
-                                    if (i + 1 < parts.Length)
-                                        hash[parts[i]] = parts[i + 1];
-
-                                if (_store.TryGetValue(key, out var existingItem) && existingItem.Type == DataType.Hash)
-                                {
-                                    var existingHash = existingItem.GetHash();
-                                    foreach (var kvp in hash)
-                                        existingHash[kvp.Key] = kvp.Value;
-                                }
-                                else
-                                    _store[key] = new CacheItem(hash, DataType.Hash, null);
-                            }
-                            break;
-
-                        case "HDEL":
-                            if (parts.Length >= 3)
-                            {
-                                var key = parts[1];
-                                var fields = parts.Skip(2).ToArray();
-
-                                if (_store.TryGetValue(key, out var item) && item.Type == DataType.Hash)
-                                {
-                                    var hash = item.GetHash();
-                                    foreach (var field in fields)
-                                        hash.Remove(field);
-
-                                    if (hash.Count == 0)
-                                        _store.TryRemove(key, out _);
-                                }
-                            }
-                            break;
-
-                        case "SADD":
-                            if (parts.Length >= 3)
-                            {
-                                var key = parts[1];
-                                var members = parts.Skip(2).ToArray();
-
-                                if (_store.TryGetValue(key, out var existingItem) && existingItem.Type == DataType.Set)
-                                {
-                                    var set = existingItem.GetSet();
-                                    foreach (var member in members)
-                                        set.Add(member);
-                                }
-                                else
-                                {
-                                    var set = new HashSet<string>(members);
-                                    _store[key] = new CacheItem(set, DataType.Set, null);
-                                }
-                            }
-                            break;
-
-                        case "SREM":
-                            if (parts.Length >= 3)
-                            {
-                                var key = parts[1];
-                                var members = parts.Skip(2).ToArray();
-
-                                if (_store.TryGetValue(key, out var item) && item.Type == DataType.Set)
-                                {
-                                    var set = item.GetSet();
-                                    foreach (var member in members)
-                                        set.Remove(member);
-
-                                    if (set.Count == 0)
-                                        _store.TryRemove(key, out _);
-                                }
-                            }
-                            break;
-
-                        case "ZADD":
-                            if (parts.Length >= 4)
-                            {
-                                var key = parts[1];
-                                var dict = new SortedDictionary<double, HashSet<string>>();
-
-                                for (int i = 2; i < parts.Length; i += 2)
-                                {
-                                    if (i + 1 < parts.Length && double.TryParse(parts[i], out double score))
-                                    {
-                                        if (!dict.TryGetValue(score, out var members))
+                                        if (parts[i].ToUpperInvariant() == "EX" && i + 1 < parts.Length)
                                         {
-                                            members = new HashSet<string>();
-                                            dict[score] = members;
+                                            if (int.TryParse(parts[i + 1], out var ex) && ex > 0)
+                                                expiry = DateTime.UtcNow.AddSeconds(ex);
+                                            break;
                                         }
-                                        members.Add(parts[i + 1]);
-                                    }
-                                }
-
-                                if (_store.TryGetValue(key, out var existingItem) && existingItem.Type == DataType.SortedSet)
-                                {
-                                    var existingSortedSet = existingItem.GetSortedSet();
-                                    foreach (var kvp in dict)
-                                    {
-                                        if (!existingSortedSet.TryGetValue(kvp.Key, out var existingMembers))
-                                            existingSortedSet[kvp.Key] = new HashSet<string>(kvp.Value);
-                                        else
-                                            foreach (var member in kvp.Value)
-                                                existingMembers.Add(member);
-                                    }
-                                }
-                                else
-                                {
-                                    _store[key] = new CacheItem(dict, DataType.SortedSet, null);
-                                }
-                            }
-                            break;
-
-                        case "ZREM":
-                            if (parts.Length >= 3)
-                            {
-                                var key = parts[1];
-                                var members = parts.Skip(2).ToArray();
-
-                                if (_store.TryGetValue(key, out var item) && item.Type == DataType.SortedSet)
-                                {
-                                    var sortedSet = item.GetSortedSet();
-                                    bool modified = false;
-                                    var scoresToRemove = new List<double>();
-
-                                    foreach (var kvp in sortedSet)
-                                    {
-                                        foreach (var member in members)
-                                            if (kvp.Value.Contains(member))
-                                            {
-                                                kvp.Value.Remove(member);
-                                                modified = true;
-                                            }
-
-                                        if (kvp.Value.Count == 0)
-                                            scoresToRemove.Add(kvp.Key);
                                     }
 
-                                    foreach (var score in scoresToRemove)
-                                        sortedSet.Remove(score);
-
-                                    if (sortedSet.Count == 0)
-                                        _store.TryRemove(key, out _);
+                                    _store[key] = new CacheItem(value, expiry);
                                 }
-                            }
-                            break;
+                                break;
 
-                        case "ZINCRBY":
-                            if (parts.Length >= 4)
-                            {
-                                var key = parts[1];
-                                if (double.TryParse(parts[2], out double increment) && !string.IsNullOrEmpty(parts[3]))
+                            case "DEL":
+                                if (parts.Length >= 2)
+                                    foreach (var key in parts.Skip(1))
+                                        if (IsValidKey(key))
+                                            _store.TryRemove(key, out _);
+                                break;
+
+                            case "EXPIRE":
+                                if (parts.Length >= 3 && IsValidKey(parts[1]))
                                 {
-                                    var member = parts[3];
+                                    var key = parts[1];
+                                    if (int.TryParse(parts[2], out var seconds) && seconds > 0 && _store.TryGetValue(key, out var item))
+                                        item.ExpiryTime = DateTime.UtcNow.AddSeconds(seconds);
+                                }
+                                break;
 
-                                    if (_store.TryGetValue(key, out var item) &&
-                                        item.Type == DataType.SortedSet)
+                            case "PEXPIRE":
+                                if (parts.Length >= 3 && IsValidKey(parts[1]))
+                                {
+                                    var key = parts[1];
+                                    if (int.TryParse(parts[2], out var milliseconds) && milliseconds > 0 && _store.TryGetValue(key, out var item))
+                                        item.ExpiryTime = DateTime.UtcNow.AddMilliseconds(milliseconds);
+                                }
+                                break;
+
+                            case "PERSIST":
+                                if (parts.Length >= 2 && IsValidKey(parts[1]))
+                                {
+                                    var key = parts[1];
+                                    if (_store.TryGetValue(key, out var item))
+                                        item.ExpiryTime = null;
+                                }
+                                break;
+
+                            case "LPUSH":
+                                if (parts.Length >= 3 && IsValidKey(parts[1]))
+                                {
+                                    var key = parts[1];
+                                    var values = parts.Skip(2).ToArray();
+
+                                    if (_store.TryGetValue(key, out var existingItem) && existingItem.Type == DataType.List)
                                     {
-                                        var sortedSet = item.GetSortedSet();
-                                        bool found = false;
+                                        var list = existingItem.GetList();
+                                        list.InsertRange(0, values);
+                                    }
+                                    else
+                                    {
+                                        var newList = new List<string>(values);
+                                        _store[key] = new CacheItem(newList, DataType.List, null);
+                                    }
+                                }
+                                break;
 
-                                        foreach (var kvp in sortedSet)
-                                            if (kvp.Value.Contains(member))
-                                            {
-                                                kvp.Value.Remove(member);
-                                                var newScore = kvp.Key + increment;
+                            case "RPUSH":
+                                if (parts.Length >= 3 && IsValidKey(parts[1]))
+                                {
+                                    var key = parts[1];
+                                    var values = parts.Skip(2).ToArray();
 
-                                                if (!sortedSet.TryGetValue(newScore, out var newBucket))
-                                                {
-                                                    newBucket = new HashSet<string>();
-                                                    sortedSet[newScore] = newBucket;
-                                                }
-                                                newBucket.Add(member);
-                                                found = true;
-                                                break;
-                                            }
+                                    if (_store.TryGetValue(key, out var existingItem) && existingItem.Type == DataType.List)
+                                    {
+                                        var list = existingItem.GetList();
+                                        list.AddRange(values);
+                                    }
+                                    else
+                                    {
+                                        var newList = new List<string>(values);
+                                        _store[key] = new CacheItem(newList, DataType.List, null);
+                                    }
+                                }
+                                break;
 
-                                        if (!found)
+                            case "LPOP":
+                                if (parts.Length >= 2 && IsValidKey(parts[1]))
+                                {
+                                    var key = parts[1];
+                                    if (_store.TryGetValue(key, out var item) && item.Type == DataType.List)
+                                    {
+                                        var list = item.GetList();
+                                        if (list.Count > 0)
                                         {
-                                            if (!sortedSet.TryGetValue(increment, out var newBucket))
+                                            list.RemoveAt(0);
+                                            if (list.Count == 0)
+                                                _store.TryRemove(key, out _);
+                                        }
+                                    }
+                                }
+                                break;
+
+                            case "RPOP":
+                                if (parts.Length >= 2 && IsValidKey(parts[1]))
+                                {
+                                    var key = parts[1];
+                                    if (_store.TryGetValue(key, out var item) && item.Type == DataType.List)
+                                    {
+                                        var list = item.GetList();
+                                        if (list.Count > 0)
+                                        {
+                                            list.RemoveAt(list.Count - 1);
+                                            if (list.Count == 0)
+                                                _store.TryRemove(key, out _);
+                                        }
+                                    }
+                                }
+                                break;
+
+                            case "HSET":
+                                if (parts.Length >= 4 && IsValidKey(parts[1]))
+                                {
+                                    var key = parts[1];
+                                    var field = parts[2];
+                                    var value = parts[3];
+
+                                    if (_store.TryGetValue(key, out var existingItem) && existingItem.Type == DataType.Hash)
+                                    {
+                                        var hash = existingItem.GetHash();
+                                        hash[field] = value;
+                                    }
+                                    else
+                                    {
+                                        var hash = new Dictionary<string, string> { [field] = value };
+                                        _store[key] = new CacheItem(hash, DataType.Hash, null);
+                                    }
+                                }
+                                break;
+
+                            case "HMSET":
+                                if (parts.Length >= 3 && parts.Length % 2 == 1 && IsValidKey(parts[1]))
+                                {
+                                    var key = parts[1];
+                                    var hash = new Dictionary<string, string>();
+                                    for (int i = 2; i < parts.Length; i += 2)
+                                        if (i + 1 < parts.Length)
+                                            hash[parts[i]] = parts[i + 1];
+
+                                    if (_store.TryGetValue(key, out var existingItem) && existingItem.Type == DataType.Hash)
+                                    {
+                                        var existingHash = existingItem.GetHash();
+                                        foreach (var kvp in hash)
+                                            existingHash[kvp.Key] = kvp.Value;
+                                    }
+                                    else
+                                        _store[key] = new CacheItem(hash, DataType.Hash, null);
+                                }
+                                break;
+
+                            case "HDEL":
+                                if (parts.Length >= 3 && IsValidKey(parts[1]))
+                                {
+                                    var key = parts[1];
+                                    var fields = parts.Skip(2).ToArray();
+
+                                    if (_store.TryGetValue(key, out var item) && item.Type == DataType.Hash)
+                                    {
+                                        var hash = item.GetHash();
+                                        foreach (var field in fields)
+                                            hash.Remove(field);
+
+                                        if (hash.Count == 0)
+                                            _store.TryRemove(key, out _);
+                                    }
+                                }
+                                break;
+
+                            case "SADD":
+                                if (parts.Length >= 3 && IsValidKey(parts[1]))
+                                {
+                                    var key = parts[1];
+                                    var members = parts.Skip(2).ToArray();
+
+                                    if (_store.TryGetValue(key, out var existingItem) && existingItem.Type == DataType.Set)
+                                    {
+                                        var set = existingItem.GetSet();
+                                        foreach (var member in members)
+                                            set.Add(member);
+                                    }
+                                    else
+                                    {
+                                        var set = new HashSet<string>(members);
+                                        _store[key] = new CacheItem(set, DataType.Set, null);
+                                    }
+                                }
+                                break;
+
+                            case "SREM":
+                                if (parts.Length >= 3 && IsValidKey(parts[1]))
+                                {
+                                    var key = parts[1];
+                                    var members = parts.Skip(2).ToArray();
+
+                                    if (_store.TryGetValue(key, out var item) && item.Type == DataType.Set)
+                                    {
+                                        var set = item.GetSet();
+                                        foreach (var member in members)
+                                            set.Remove(member);
+
+                                        if (set.Count == 0)
+                                            _store.TryRemove(key, out _);
+                                    }
+                                }
+                                break;
+
+                            case "ZADD":
+                                if (parts.Length >= 4 && IsValidKey(parts[1]))
+                                {
+                                    var key = parts[1];
+                                    var dict = new SortedDictionary<double, HashSet<string>>();
+
+                                    for (int i = 2; i < parts.Length; i += 2)
+                                    {
+                                        if (i + 1 < parts.Length && double.TryParse(parts[i], out double score) && !double.IsNaN(score) && !double.IsInfinity(score))
+                                        {
+                                            if (!dict.TryGetValue(score, out var members))
                                             {
-                                                newBucket = new HashSet<string>();
-                                                sortedSet[increment] = newBucket;
+                                                members = new HashSet<string>();
+                                                dict[score] = members;
                                             }
-                                            newBucket.Add(member);
+                                            members.Add(parts[i + 1]);
+                                        }
+                                    }
+
+                                    if (_store.TryGetValue(key, out var existingItem) && existingItem.Type == DataType.SortedSet)
+                                    {
+                                        var existingSortedSet = existingItem.GetSortedSet();
+                                        foreach (var kvp in dict)
+                                        {
+                                            if (!existingSortedSet.TryGetValue(kvp.Key, out var existingMembers))
+                                                existingSortedSet[kvp.Key] = new HashSet<string>(kvp.Value);
+                                            else
+                                                foreach (var member in kvp.Value)
+                                                    existingMembers.Add(member);
                                         }
                                     }
                                     else
                                     {
-                                        var sortedSet = new SortedDictionary<double, HashSet<string>>();
-                                        var members = new HashSet<string> { member };
-                                        sortedSet[increment] = members;
-                                        _store[key] = new CacheItem(sortedSet, DataType.SortedSet, null);
+                                        _store[key] = new CacheItem(dict, DataType.SortedSet, null);
                                     }
                                 }
-                            }
-                            break;
+                                break;
 
-                        default:
-                            Console.WriteLine($"Unsupported command during AOF replay: {command}");
-                            break;
+                            case "ZREM":
+                                if (parts.Length >= 3 && IsValidKey(parts[1]))
+                                {
+                                    var key = parts[1];
+                                    var members = parts.Skip(2).ToArray();
+
+                                    if (_store.TryGetValue(key, out var item) && item.Type == DataType.SortedSet)
+                                    {
+                                        var sortedSet = item.GetSortedSet();
+                                        bool modified = false;
+                                        var scoresToRemove = new List<double>();
+
+                                        foreach (var kvp in sortedSet)
+                                        {
+                                            foreach (var member in members)
+                                                if (kvp.Value.Contains(member))
+                                                {
+                                                    kvp.Value.Remove(member);
+                                                    modified = true;
+                                                }
+
+                                            if (kvp.Value.Count == 0)
+                                                scoresToRemove.Add(kvp.Key);
+                                        }
+
+                                        foreach (var score in scoresToRemove)
+                                            sortedSet.Remove(score);
+
+                                        if (sortedSet.Count == 0)
+                                            _store.TryRemove(key, out _);
+                                    }
+                                }
+                                break;
+
+                            case "ZINCRBY":
+                                if (parts.Length >= 4 && IsValidKey(parts[1]))
+                                {
+                                    var key = parts[1];
+                                    if (double.TryParse(parts[2], out double increment) && !double.IsNaN(increment) && !double.IsInfinity(increment) && !string.IsNullOrEmpty(parts[3]))
+                                    {
+                                        var member = parts[3];
+
+                                        if (_store.TryGetValue(key, out var item) &&
+                                            item.Type == DataType.SortedSet)
+                                        {
+                                            var sortedSet = item.GetSortedSet();
+                                            bool found = false;
+
+                                            foreach (var kvp in sortedSet)
+                                                if (kvp.Value.Contains(member))
+                                                {
+                                                    kvp.Value.Remove(member);
+                                                    var newScore = kvp.Key + increment;
+                                                    
+                                                    if (!double.IsNaN(newScore) && !double.IsInfinity(newScore))
+                                                    {
+                                                        if (!sortedSet.TryGetValue(newScore, out var newBucket))
+                                                        {
+                                                            newBucket = new HashSet<string>();
+                                                            sortedSet[newScore] = newBucket;
+                                                        }
+                                                        newBucket.Add(member);
+                                                    }
+                                                    found = true;
+                                                    break;
+                                                }
+
+                                            if (!found)
+                                            {
+                                                if (!sortedSet.TryGetValue(increment, out var newBucket))
+                                                {
+                                                    newBucket = new HashSet<string>();
+                                                    sortedSet[increment] = newBucket;
+                                                }
+                                                newBucket.Add(member);
+                                            }
+                                        }
+                                        else
+                                        {
+                                            var sortedSet = new SortedDictionary<double, HashSet<string>>();
+                                            var members = new HashSet<string> { member };
+                                            sortedSet[increment] = members;
+                                            _store[key] = new CacheItem(sortedSet, DataType.SortedSet, null);
+                                        }
+                                    }
+                                }
+                                break;
+
+                            default:
+                                // Silently ignore unknown commands during replay to prevent injection
+                                break;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        // Log error but continue processing remaining commands
+                        Console.WriteLine($"Error replaying command '{command}': {ex.Message}");
                     }
                 }
             }
